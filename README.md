@@ -82,3 +82,126 @@ cd $SAPIENS_ROOT/scripts/[pretrain,pose,seg]/optimize/local
 For inference:
 - Use `demo.AdhocImageDataset` wrapped with a `DataLoader` for image fetching and preprocessing.\
 - Utilize the `WorkerPool` class for multiprocessing capabilities in tasks like saving predictions and visualizations.
+
+## Folder Structure Example
+
+project_root/
+├── data/
+│   ├── videos/
+│   │   └── <VIDEO_NAME>.mp4
+│   └── <FRAME_FOLDER>/
+│       ├── frame_000001.jpg
+│       ├── frame_000002.jpg
+│       └── ...
+├── output/
+│   └── pose/
+│       └── <OUTPUT_FOLDER>/
+├── demo/
+│   ├── vis_pose.py
+│   ├── tracker.py
+    ├── slider.py
+    ├── gait_metrics.py
+    └── ...
+└── sapiens_checkpoints/
+    └── torchscript/
+        └── pose/
+            └── checkpoints/
+                └── sapiens_1b/
+
+
+## 🧍 Gait Analysis Pipeline
+
+This repository also includes a gait analysis pipeline built on top of Sapiens-Lite pose estimation. The pipeline extracts frames from walking videos, runs Sapiens pose estimation, tracks the selected subject, and computes gait-related metrics such as ankle trajectory, stride timing, and left-right gait symmetry.
+
+
+
+### 1. Extract Frames from Video
+
+Use FFmpeg to convert an input walking video into image frames:
+
+```bash
+ffmpeg -i "./data/videos/<VIDEO_NAME>.mp4" -q:v 2 "./data/<FRAME_FOLDER>/frame_%06d.jpg"
+```
+
+
+### 2. Extract Skeletons from Frames
+```bash
+python ./demo/vis_pose.py "<SAPIENS_CHECKPOINT_PATH>" \
+  --input "./data/<FRAME_FOLDER>" \
+  --output-root "./output/pose/<OUTPUT_FOLDER>" \
+  --num_keypoints 17 \
+  --shape 1024 768 \
+  --device cuda:0 \
+  --kpt-thr 0.3 \
+  --yolo-model "yolov8m.pt" \
+  --batch_size 1
+```
+
+### 3. Run Subject Tracking
+```bash
+python ./demo/tracker.py
+```
+
+
+### 2.5 (optional) Manual Stride Annotation
+```bash
+python ./demo/slider.py
+```
+
+### 3. Compute Gait Metrics
+
+Run the gait analysis script on a tracked pose sequence:
+
+```bash
+python ./demo/gait_metrics.py --preset <PRESET_NAME>
+```
+
+This will load the predefined configuration for the selected video, including:
+
+
+track_json_path
+metrics_dir
+fps
+start_frame
+end_frame
+gt_json_path if available
+
+If gt_json_path is provided, the script will generate the front/back stride analysis with ground-truth vertical markers. Otherwise, it will run the same front/back analysis without ground truth.
+
+To additionally generate the loop-motion video, use:
+
+```bash
+python ./demo/gait_metrics.py --preset Baseline_side --run_loop_motion
+```
+
+You can also override preset values manually. For example:
+
+```bash
+python ./demo/gait_metrics.py --preset Baseline_side --end_frame 150
+```
+
+Or run the script without a preset by specifying paths directly:
+
+```bash
+python ./demo/gait_metrics.py \
+  --track_json_path "./output/pose/<VIDEO_NAME>/tracked/track.json" \
+  --metrics_dir "./output/pose/<VIDEO_NAME>/metrics" \
+  --fps 30 \
+  --start_frame 20 \
+  --end_frame 115
+```
+
+With loop-motion video:
+
+```bash
+python .\demo\gait_metrics.py --preset Baseline_side --run_loop_motion
+```
+
+The script generates gait-related plots and summary files in the metrics output folder, including:
+
+17_keypoints_time_vs_y.png
+front/back stride plots
+step timing and height visualizations
+wrist_relative_height.png
+metrics.txt
+optional loop-motion video

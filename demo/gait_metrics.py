@@ -4,6 +4,7 @@ from matplotlib.animation import FuncAnimation, FFMpegWriter
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks, savgol_filter
+import argparse
 
 
 # COCO 17 keypoint names
@@ -1343,13 +1344,15 @@ def plot_feet_y_diff_with_peaks_and_gt(frames,
 
     plt.show()
 
-def analyze_front_back_stride_by_y_diff_with_gt(frames,
-                                                keypoints_all,
-                                                gt_json_path,
-                                                fps=30.0,
-                                                use_normalized_y=False,
-                                                bias_correct=False,
-                                                save_prefix=None):
+def analyze_front_back_stride_by_y_diff(
+    frames,
+    keypoints_all,
+    fps=30.0,
+    use_normalized_y=False,
+    bias_correct=False,
+    save_prefix=None,
+    gt_json_path=None):
+
     results = detect_peaks_from_feet_y_diff(
         frames,
         keypoints_all,
@@ -1362,22 +1365,38 @@ def analyze_front_back_stride_by_y_diff_with_gt(frames,
         prominence=0.03 if use_normalized_y else 3.0
     )
 
-    plot_feet_y_diff_with_peaks_and_gt(
-        frames,
-        results["y_diff_raw"],
-        results["y_diff_smooth"],
-        results["pos_peaks"],
-        results["neg_peaks"],
-        gt_json_path=gt_json_path,
-        use_normalized_y=use_normalized_y,
-        pos_gt_label="left GT",
-        neg_gt_label="right GT",
-        save_path=None if save_prefix is None else (
-            f"{save_prefix}_feet_y_diff_with_gt_norm.png"
-            if use_normalized_y else
-            f"{save_prefix}_feet_y_diff_with_gt_raw.png"
+    # plot with or without GT
+    if gt_json_path is not None:
+        plot_feet_y_diff_with_peaks_and_gt(
+            frames,
+            results["y_diff_raw"],
+            results["y_diff_smooth"],
+            results["pos_peaks"],
+            results["neg_peaks"],
+            gt_json_path=gt_json_path,
+            use_normalized_y=use_normalized_y,
+            pos_gt_label="left GT",
+            neg_gt_label="right GT",
+            save_path=None if save_prefix is None else (
+                f"{save_prefix}_feet_y_diff_with_gt_norm.png"
+                if use_normalized_y else
+                f"{save_prefix}_feet_y_diff_with_gt_raw.png"
+            )
         )
-    )
+    else:
+        plot_feet_y_diff_with_peaks(
+            frames,
+            results["y_diff_raw"],
+            results["y_diff_smooth"],
+            results["pos_peaks"],
+            results["neg_peaks"],
+            use_normalized_y=use_normalized_y,
+            save_path=None if save_prefix is None else (
+                f"{save_prefix}_feet_y_diff_peaks_norm.png"
+                if use_normalized_y else
+                f"{save_prefix}_feet_y_diff_peaks_raw.png"
+            )
+        )
 
     print("\nFront/back stride candidates from feet Y difference:")
     print(f"  bias correction: {bias_correct}, bias = {results['y_diff_bias']:.6f}")
@@ -1400,6 +1419,7 @@ def analyze_front_back_stride_by_y_diff_with_gt(frames,
     right_step_heights = step_metrics["right"]["step_heights"]
     left_step_areas = step_metrics["left"]["step_areas_seconds"]
     right_step_areas = step_metrics["right"]["step_areas_seconds"]
+
     curve_integrals = compute_curve_integrals(
         frames,
         results["y_diff_smooth"],
@@ -1449,99 +1469,54 @@ def analyze_front_back_stride_by_y_diff_with_gt(frames,
     )
 
     results.update({
+        "gt_json_path": gt_json_path,
+        "has_ground_truth": gt_json_path is not None,
+
         "raw_zero_indices": step_metrics["raw_zero_indices"],
         "raw_zero_frames": step_metrics["raw_zero_frames"],
         "zero_indices": step_metrics["zero_indices"],
         "zero_frames": step_metrics["zero_frames"],
         "effective_zero_indices": step_metrics["effective_zero_indices"],
         "effective_zero_frames": step_metrics["effective_zero_frames"],
+
         "left_step_times": left_step_times,
         "right_step_times": right_step_times,
         "left_step_times_frames": left_step_times_frames,
         "right_step_times_frames": right_step_times_frames,
+
         "left_step_heights": left_step_heights,
         "right_step_heights": right_step_heights,
+
         "curve_signed_integral": curve_integrals["signed_area_seconds"],
         "curve_absolute_integral": curve_integrals["absolute_area_seconds"],
         "curve_signed_integral_frames": curve_integrals["signed_area_frames"],
         "curve_absolute_integral_frames": curve_integrals["absolute_area_frames"],
+
         "left_step_integrals": left_step_areas,
         "right_step_integrals": right_step_areas,
         "left_step_integrals_frames": step_metrics["left"]["step_areas_frames"],
         "right_step_integrals_frames": step_metrics["right"]["step_areas_frames"],
+
         "left_step_integral_mean": float(np.nanmean(left_step_areas)) if len(left_step_areas) > 0 else np.nan,
         "left_step_integral_std": float(np.nanstd(left_step_areas)) if len(left_step_areas) > 0 else np.nan,
         "right_step_integral_mean": float(np.nanmean(right_step_areas)) if len(right_step_areas) > 0 else np.nan,
         "right_step_integral_std": float(np.nanstd(right_step_areas)) if len(right_step_areas) > 0 else np.nan,
         "left_step_integral_total": float(np.nansum(left_step_areas)),
         "right_step_integral_total": float(np.nansum(right_step_areas)),
+
         "left_step_segments": step_metrics["left"]["step_segments"],
         "right_step_segments": step_metrics["right"]["step_segments"],
         "left_valid_peak_idx": step_metrics["left"]["valid_peaks"],
         "right_valid_peak_idx": step_metrics["right"]["valid_peaks"],
         "left_skipped_peak_idx": step_metrics["left"]["skipped_peaks"],
         "right_skipped_peak_idx": step_metrics["right"]["skipped_peaks"],
+
         "positive_peak_frames": frames[results["pos_peaks"]],
         "negative_peak_frames": frames[results["neg_peaks"]],
         "left_valid_peak_frames": frames[step_metrics["left"]["valid_peaks"]],
         "right_valid_peak_frames": frames[step_metrics["right"]["valid_peaks"]],
         "left_skipped_peak_frames": frames[step_metrics["left"]["skipped_peaks"]],
         "right_skipped_peak_frames": frames[step_metrics["right"]["skipped_peaks"]],
-    })
-
-    return results
-
-def analyze_front_back_stride_by_y_diff(frames,
-                                        keypoints_all,
-                                        fps=30.0,
-                                        use_normalized_y=False,
-                                        bias_correct=False,
-                                        save_prefix=None):
-    results = detect_peaks_from_feet_y_diff(
-        frames,
-        keypoints_all,
-        fps=fps,
-        use_normalized_y=use_normalized_y,
-        bias_correct=bias_correct,
-        smooth_window=15,
-        smooth_polyorder=2,
-        min_distance_sec=0.25,
-        prominence=0.03 if use_normalized_y else 3.0
-    )
-
-    plot_feet_y_diff_with_peaks(
-        frames,
-        results["y_diff_raw"],
-        results["y_diff_smooth"],
-        results["pos_peaks"],
-        results["neg_peaks"],
-        use_normalized_y=use_normalized_y,
-        save_path=None if save_prefix is None else (
-            f"{save_prefix}_feet_y_diff_peaks_norm.png"
-            if use_normalized_y else
-            f"{save_prefix}_feet_y_diff_peaks_raw.png"
-        )
-    )
-
-    print("\nFront/back stride candidates from feet Y difference:")
-    print(f"  bias correction: {bias_correct}, bias = {results['y_diff_bias']:.6f}")
-    print(f"  positive peaks: {frames[results['pos_peaks']] if len(results['pos_peaks']) > 0 else []}")
-    print(f"  negative peaks: {frames[results['neg_peaks']] if len(results['neg_peaks']) > 0 else []}")
-
-    curve_integrals = compute_curve_integrals(
-        frames,
-        results["y_diff_smooth"],
-        fps=fps
-    )
-    print("\nY-diff curve integrals:")
-    print(f"  signed integral: {curve_integrals['signed_area_seconds']:.6f}")
-    print(f"  absolute integral: {curve_integrals['absolute_area_seconds']:.6f}")
-
-    results.update({
-        "curve_signed_integral": curve_integrals["signed_area_seconds"],
-        "curve_absolute_integral": curve_integrals["absolute_area_seconds"],
-        "curve_signed_integral_frames": curve_integrals["signed_area_frames"],
-        "curve_absolute_integral_frames": curve_integrals["absolute_area_frames"],
     })
 
     return results
@@ -1955,58 +1930,131 @@ def save_loop_motion_video(frames,
     print(f"Winding 2pi event frames in video: {frames[event_idx] if len(event_idx) > 0 else []}")
 
 
+PRESETS = {
+    "Baseline_side": {
+        "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked\track.json",
+        "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\metrics",
+        "fps": 30.0,
+        "start_frame": 20,
+        "end_frame": 115,
+        "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked\a_manual_stride_events.json",
+        "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\metrics\loop_motion",
+    },
+    "Chiocchi_mirror": {
+        "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\track.json",
+        "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\metrics",
+        "fps": 30.0,
+        "start_frame": 30,
+        "end_frame": 480,
+        "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\a_manual_stride_events.json",
+        "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\metrics\loop_motion",
+    },
+    "Sronce_walker_post_op": {
+        "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\tracked\track.json",
+        "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\metrics",
+        "fps": 60.0,
+        "start_frame": None,
+        "end_frame": 300,
+        "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\tracked\a_manual_stride_events.json",
+        "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\metrics\loop_motion",
+    },
+    "Sronce_preop": {
+        "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\tracked\track.json",
+        "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\metrics",
+        "fps": 60.0,
+        "start_frame": None,
+        "end_frame": None,
+        "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\tracked\a_manual_stride_events.json",
+        "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\metrics\loop_motion",
+    },
+    "Baseline": {
+        "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\tracked\track.json",
+        "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\metrics",
+        "fps": 24.0,
+        "start_frame": None,
+        "end_frame": None,
+        "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\tracked\a_manual_stride_events.json",
+        "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\metrics\loop_motion",
+    },
+    "Ovcharenko_preop": {
+        "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\tracked\track.json",
+        "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\metrics",
+        "fps": 60.0,
+        "start_frame": 400,
+        "end_frame": None,
+        "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\tracked\a_manual_stride_events.json",
+        "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\metrics\loop_motion",
+    },
+}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run gait metrics analysis.")
+
+    parser.add_argument(
+        "--preset",
+        type=str,
+        choices=PRESETS.keys(),
+        help="Use a predefined video configuration."
+    )
+
+    parser.add_argument("--track_json_path", type=str, help="Path to tracked track.json")
+    parser.add_argument("--metrics_dir", type=str, help="Directory to save metrics outputs")
+    parser.add_argument("--fps", type=float, help="Video FPS")
+    parser.add_argument("--start_frame", type=int, default=None, help="Start frame")
+    parser.add_argument("--end_frame", type=int, default=None, help="End frame")
+    parser.add_argument("--gt_json_path", type=str, default=None, help="Path to GT stride events json")
+    parser.add_argument("--loop_motion_prefix", type=str, default=None, help="Prefix for loop motion video output")
+
+    parser.add_argument("--run_loop_motion", action="store_true", help="Run loop motion video generation")
+
+    return parser.parse_args()
+
+
+def build_config(args):
+    config = {
+        "track_json_path": None,
+        "metrics_dir": None,
+        "fps": 30.0,
+        "start_frame": None,
+        "end_frame": None,
+        "gt_json_path": None,
+        "loop_motion_prefix": None,
+    }
+
+    if args.preset is not None:
+        config.update(PRESETS[args.preset])
+
+    for key in config.keys():
+        value = getattr(args, key, None)
+        if value is not None:
+            config[key] = value
+
+    if config["track_json_path"] is None:
+        raise ValueError("track_json_path is required. Please provide --preset or --track_json_path")
+    if config["metrics_dir"] is None:
+        raise ValueError("metrics_dir is required. Please provide --preset or --metrics_dir")
+
+    return config
+
 
 if __name__ == "__main__":
-    # metrics_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\metrics"
-    # os.makedirs(metrics_dir, exist_ok=True)
-    # track_json_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\track.json"
-    # save_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\17_keypoints_time_vs_y.png"
-    # fps = 30.0
-    # start_frame = 30
-    # end_frame = 480
+    args = parse_args()
+    config = build_config(args)
 
-    metrics_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\metrics"
+    metrics_dir = config["metrics_dir"]
     os.makedirs(metrics_dir, exist_ok=True)
-    track_json_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked\track.json"
-    save_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\metrics\17_keypoints_time_vs_y.png"
-    fps = 30.0
-    start_frame = 20
-    end_frame = 115
 
-    # metrics_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\metrics"
-    # os.makedirs(metrics_dir, exist_ok=True)
-    # track_json_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\tracked\track.json"
-    # save_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\metrics\17_keypoints_time_vs_y.png"
-    # fps = 60.0
-    # start_frame = None
-    # end_frame = 300
+    track_json_path = config["track_json_path"]
+    fps = config["fps"]
+    start_frame = config["start_frame"]
+    end_frame = config["end_frame"]
+    gt_json_path = config["gt_json_path"]
+    loop_motion_prefix = config["loop_motion_prefix"]
 
-    # metrics_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\metrics"
-    # os.makedirs(metrics_dir, exist_ok=True)
-    # track_json_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\tracked\track.json"
-    # save_path = os.path.join(metrics_dir, "17_keypoints_time_vs_y.png")
-    # fps = 60.0
-    # start_frame = None
-    # end_frame = None
-
-    # metrics_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\metrics"
-    # os.makedirs(metrics_dir, exist_ok=True)
-    # track_json_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\tracked\track.json"
-    # save_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\metrics\17_keypoints_time_vs_y.png"
-    # fps = 24.0
-    # start_frame = None
-    # end_frame = None
-
-    # metrics_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\metrics"
-    # os.makedirs(metrics_dir, exist_ok=True)
-    # track_json_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\tracked\track.json"
-    # save_path = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\metrics\17_keypoints_time_vs_y.png"
-    # fps = 60.0
-    # start_frame = 400
-    # end_frame = None
+    save_path = os.path.join(metrics_dir, "17_keypoints_time_vs_y.png")
 
     frames, keypoints_all = load_track_json(track_json_path)
-
 
     frames, keypoints_all = crop_frame_range(
         frames,
@@ -2017,45 +2065,37 @@ if __name__ == "__main__":
 
     print(f"Using frames from {frames[0]} to {frames[-1]} (total {len(frames)} frames)")
 
-    # Step 1: plot all joints time vs y and print top joints by range and std
+    # Step 1: plot all joints
     stats = plot_all_joints_time_vs_y(frames, keypoints_all, save_path)
     print_top_joints(stats, top_k=5, metric="range")
     print_top_joints(stats, top_k=5, metric="std")
 
-    # # Step 2: analyze left/right ankle separately
-    # gait_results = analyze_ankle_stride(
-    #     frames,
-    #     keypoints_all,
-    #     fps=fps,
-    #     save_prefix=os.path.join(metrics_dir, "gait")
-    # )
+    # Step 2: optional loop motion
+    if args.run_loop_motion:
+        save_loop_motion_video(
+            frames,
+            keypoints_all,
+            origin_foot="left",
+            normalize_y=True,
+            fps=fps,
+            tail_length=None,
+            bias_correct=True,
+            beta_x_normalize=True,
+            save_prefix=loop_motion_prefix or os.path.join(metrics_dir, "loop_motion")
+        )
 
-    # Step 2.5: save loop motion videos (optional, only for videos shooting from the side)
-    save_loop_motion_video(
+    # Step 3: front/back stride detection (default run)
+    fb_norm = analyze_front_back_stride_by_y_diff(
         frames,
         keypoints_all,
-        origin_foot="left",
-        normalize_y=True,
-        fps=fps,
-        tail_length=None,  # show recent 60 points only; set None to show full history
-        bias_correct=True,
-        beta_x_normalize=True,
-        save_prefix=r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\metrics\loop_motion"
-    )
-
-    # Step 3: front/back stride detection from feet Y difference (normalized)
-    #  with GT
-    fb_norm = analyze_front_back_stride_by_y_diff_with_gt(
-        frames,
-        keypoints_all,
-        gt_json_path=r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked\a_manual_stride_events.json",
         fps=fps,
         use_normalized_y=True,
         bias_correct=False,
-        save_prefix=os.path.join(metrics_dir, "frontback_norm")
+        save_prefix=os.path.join(metrics_dir, "frontback_norm"),
+        gt_json_path=gt_json_path
     )
 
-    # Step 4: wrist relative height
+    # Step 4: wrist relative height (default run)
     wrist_results = analyze_wrist_relative_height(
         frames,
         keypoints_all,

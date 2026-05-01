@@ -85,6 +85,10 @@ def img_save_and_viz(image, result, output_path, seg_dir):
     )
     mask = np.load(mask_path)
 
+    if np.sum(mask) == 0:
+        print(f"[Warning] no person detected, skip: {image_name}")
+        return
+
     ##-----------save depth_map to disk---------------------
     save_path = (
         output_path.replace(".png", ".npy")
@@ -96,6 +100,10 @@ def img_save_and_viz(image, result, output_path, seg_dir):
     depth_map[~mask] = np.nan
     depth_foreground = depth_map[mask]  ## value in range [0, 1]
     processed_depth = np.full((mask.shape[0], mask.shape[1], 3), 100, dtype=np.uint8)
+
+    if len(depth_foreground) == 0:
+        print(f"[Warning] empty foreground depth, skip: {image_name}")
+        return
 
     if len(depth_foreground) > 0:
         min_val, max_val = np.min(depth_foreground), np.max(depth_foreground)
