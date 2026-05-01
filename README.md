@@ -84,7 +84,7 @@ For inference:
 - Utilize the `WorkerPool` class for multiprocessing capabilities in tasks like saving predictions and visualizations.
 
 ## Folder Structure Example
-
+```plaintext
 project_root/
 ├── data/
 │   ├── videos/
@@ -107,6 +107,7 @@ project_root/
         └── pose/
             └── checkpoints/
                 └── sapiens_1b/
+```
 
 
 ## 🧍 Gait Analysis Pipeline
@@ -158,30 +159,26 @@ python ./demo/gait_metrics.py --preset <PRESET_NAME>
 
 This will load the predefined configuration for the selected video, including:
 
-
-track_json_path
-metrics_dir
-fps
-start_frame
-end_frame
-gt_json_path if available
+- track_json_path
+- metrics_dir
+- fps
+- start_frame
+- end_frame
+- gt_json_path if available
 
 If gt_json_path is provided, the script will generate the front/back stride analysis with ground-truth vertical markers. Otherwise, it will run the same front/back analysis without ground truth.
 
 To additionally generate the loop-motion video, use:
-
 ```bash
 python ./demo/gait_metrics.py --preset Baseline_side --run_loop_motion
 ```
 
 You can also override preset values manually. For example:
-
 ```bash
 python ./demo/gait_metrics.py --preset Baseline_side --end_frame 150
 ```
 
 Or run the script without a preset by specifying paths directly:
-
 ```bash
 python ./demo/gait_metrics.py \
   --track_json_path "./output/pose/<VIDEO_NAME>/tracked/track.json" \
@@ -192,16 +189,15 @@ python ./demo/gait_metrics.py \
 ```
 
 With loop-motion video:
-
 ```bash
 python .\demo\gait_metrics.py --preset Baseline_side --run_loop_motion
 ```
 
 The script generates gait-related plots and summary files in the metrics output folder, including:
 
-17_keypoints_time_vs_y.png
-front/back stride plots
-step timing and height visualizations
-wrist_relative_height.png
-metrics.txt
-optional loop-motion video
+- 17_keypoints_time_vs_y.png
+- front/back stride plots
+- step timing and height visualizations
+- wrist_relative_height.png
+- metrics.txt
+- optional loop-motion video
