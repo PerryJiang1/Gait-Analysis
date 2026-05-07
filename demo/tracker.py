@@ -446,7 +446,7 @@ def track_sequence_to_jpg_hungarian_reselect(
 ):
     os.makedirs(out_dir, exist_ok=True)
 
-    json_paths = sorted(glob.glob(f"{json_dir}/*.json"))
+    json_paths = sorted(glob.glob(os.path.join(json_dir, "frame_*.json")))
     assert len(json_paths) > 0
 
     track = []
@@ -695,24 +695,30 @@ if __name__ == "__main__":
     # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker"
     # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Sronce_walker"
     # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker\tracked"
+
     # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop"
     # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Ovcharenko_preop"
     # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Ovcharenko_preop\tracked"
+
     # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\downtown_cafe\17"
     # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\downtown_cafe_00"
-    # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\downtown_cafe\tracked3"
+    # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\downtown_cafe\tracked"
+
     # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror"
     # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Chiocchi_mirror"
     # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror"
+
     # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline"
     # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Baseline"
     # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline\tracked"
-    # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop"
-    # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Sronce_preop"
-    # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\tracked"
-    json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side"
-    img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Baseline_side"
-    out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked"
+
+    json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop"
+    img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Sronce_preop"
+    out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\tracked"
+
+    # json_dir = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side"
+    # img_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\data\Baseline_side"
+    # out_dir  = r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked"
     out_track_path = os.path.join(out_dir, "track.json")
     out_edges_path = os.path.join(out_dir, "edges_costs.json")
 

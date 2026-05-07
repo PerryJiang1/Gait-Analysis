@@ -677,6 +677,23 @@ def write_metrics_report(save_path, fb_results, wrist_results=None):
         lines.extend(metric_summary_lines(right_wrist_smooth, "Right wrist normalized height"))
         lines.extend(metric_summary_lines(np.abs(wrist_diff), "Wrist asymmetry |L-R|"))
 
+    stride_hill = fb_results.get("stride_hill_results", None)
+    if stride_hill is not None:
+        lines.append("")
+        lines.append("Full stride hill metrics from negative-peak boundaries:")
+        lines.extend(metric_summary_lines(stride_hill.get("stride_times", []), "Stride hill time (sec)"))
+        lines.extend(metric_summary_lines(stride_hill.get("stride_heights", []), "Stride hill height"))
+        lines.extend(metric_summary_lines(stride_hill.get("stride_areas_abs", []), "Stride hill absolute area"))
+        lines.extend(metric_summary_lines(stride_hill.get("stride_peak_relative_times", []), "Stride hill peak relative timing"))
+
+        full_d2 = stride_hill.get("full_y_diff_second_derivative", None)
+        if full_d2 is not None:
+            lines.append("")
+            lines.append("Full Y-diff second derivative metrics:")
+            lines.append(f"  mean |second derivative| = {full_d2.get('y_diff_d2_mean_abs', np.nan):.6f}")
+            lines.append(f"  max |second derivative| = {full_d2.get('y_diff_d2_max_abs', np.nan):.6f}")
+            lines.append(f"  std second derivative = {full_d2.get('y_diff_d2_std', np.nan):.6f}")
+
     with open(save_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -1365,6 +1382,17 @@ def analyze_front_back_stride_by_y_diff(
         prominence=0.03 if use_normalized_y else 3.0
     )
 
+    stride_hill_results = analyze_stride_hills_from_negative_peaks(
+        frames,
+        results["y_diff_smooth"],
+        results["neg_peaks"],
+        pos_peaks=results["pos_peaks"],
+        fps=fps,
+        save_prefix=None if save_prefix is None else f"{save_prefix}_full_stride_hill",
+        min_stride_sec=0.4,
+        max_stride_sec=3.0
+    )
+
     # plot with or without GT
     if gt_json_path is not None:
         plot_feet_y_diff_with_peaks_and_gt(
@@ -1517,9 +1545,318 @@ def analyze_front_back_stride_by_y_diff(
         "right_valid_peak_frames": frames[step_metrics["right"]["valid_peaks"]],
         "left_skipped_peak_frames": frames[step_metrics["left"]["skipped_peaks"]],
         "right_skipped_peak_frames": frames[step_metrics["right"]["skipped_peaks"]],
+
+        "stride_hill_results": stride_hill_results,
     })
 
     return results
+
+def analyze_stride_hills_from_negative_peaks(
+    frames,
+    y_diff_smooth,
+    neg_peaks,
+    pos_peaks=None,
+    fps=30.0,
+    save_prefix=None,
+    min_stride_sec=0.4,
+    max_stride_sec=3.0,
+):
+    """
+    Segment full stride hills using consecutive negative peaks:
+        neg_peak_i -> neg_peak_{i+1}
+
+    This does NOT resample strides to the same length.
+    Each stride is analyzed in its original frame length.
+
+    Second derivative is computed on the full y_diff_smooth signal, not per stride.
+    """
+
+    frames = np.asarray(frames)
+    y_diff_smooth = np.asarray(y_diff_smooth, dtype=np.float32)
+    neg_peaks = np.asarray(neg_peaks, dtype=np.int32)
+
+    stride_segments = []
+    stride_times = []
+    stride_lengths_frames = []
+    stride_heights = []
+    stride_peak_values = []
+    stride_peak_frames = []
+    stride_peak_relative_times = []
+    stride_areas_abs = []
+    stride_areas_signed = []
+
+    for i in range(len(neg_peaks) - 1):
+        s = int(neg_peaks[i])
+        e = int(neg_peaks[i + 1])
+
+        if e <= s:
+            continue
+
+        stride_time = (frames[e] - frames[s]) / fps
+
+        # filter unrealistic stride windows
+        if stride_time < min_stride_sec or stride_time > max_stride_sec:
+            continue
+
+        seg_frames = frames[s:e + 1]
+        seg_y = y_diff_smooth[s:e + 1]
+
+        if len(seg_y) < 5 or not np.any(np.isfinite(seg_y)):
+            continue
+
+        # basic stride shape metrics
+        valley_start = float(seg_y[0])
+        valley_end = float(seg_y[-1])
+        baseline = 0.5 * (valley_start + valley_end)
+
+        peak_local_idx = int(np.nanargmax(seg_y))
+        peak_value = float(seg_y[peak_local_idx])
+        peak_frame = int(seg_frames[peak_local_idx])
+
+        height_from_boundary_baseline = float(peak_value - baseline)
+
+        # area metrics
+        signed_area_frames = float(np.trapezoid(seg_y, x=seg_frames))
+        abs_area_frames = float(np.trapezoid(np.abs(seg_y), x=seg_frames))
+
+        signed_area_seconds = signed_area_frames / fps
+        abs_area_seconds = abs_area_frames / fps
+
+        # peak timing inside stride, without resampling
+        peak_relative_time = (peak_frame - frames[s]) / max(1e-8, (frames[e] - frames[s]))
+
+        stride_segments.append((s, e))
+        stride_times.append(stride_time)
+        stride_lengths_frames.append(int(frames[e] - frames[s]))
+        stride_heights.append(height_from_boundary_baseline)
+        stride_peak_values.append(peak_value)
+        stride_peak_frames.append(peak_frame)
+        stride_peak_relative_times.append(peak_relative_time)
+        stride_areas_abs.append(abs_area_seconds)
+        stride_areas_signed.append(signed_area_seconds)
+
+    results = {
+        "stride_segments": stride_segments,
+        "stride_times": np.array(stride_times, dtype=np.float32),
+        "stride_lengths_frames": np.array(stride_lengths_frames, dtype=np.float32),
+        "stride_heights": np.array(stride_heights, dtype=np.float32),
+        "stride_peak_values": np.array(stride_peak_values, dtype=np.float32),
+        "stride_peak_frames": np.array(stride_peak_frames, dtype=np.int32),
+        "stride_peak_relative_times": np.array(stride_peak_relative_times, dtype=np.float32),
+        "stride_areas_abs": np.array(stride_areas_abs, dtype=np.float32),
+        "stride_areas_signed": np.array(stride_areas_signed, dtype=np.float32),
+    }
+
+    print("\nStride hill analysis from negative peaks:")
+    print(f"  number of full stride hills = {len(stride_segments)}")
+    summarize_metric(results["stride_times"], "Stride hill time (sec)")
+    summarize_metric(results["stride_heights"], "Stride hill height from boundary baseline")
+    summarize_metric(results["stride_areas_abs"], "Stride hill absolute area")
+    summarize_metric(results["stride_peak_relative_times"], "Stride hill peak relative timing")
+
+    # Compute second derivative on the full y_diff_smooth signal
+    second_deriv_results = plot_y_diff_second_derivative(
+        frames,
+        y_diff_smooth,
+        neg_peaks=neg_peaks,
+        pos_peaks=pos_peaks,
+        save_path=None if save_prefix is None else f"{save_prefix}_full_y_diff_second_derivative.png"
+    )
+    results["full_y_diff_second_derivative"] = second_deriv_results
+
+    if save_prefix is not None:
+        plot_stacked_stride_hills_original_length(
+            frames,
+            y_diff_smooth,
+            stride_segments,
+            save_path=f"{save_prefix}_stride_hills_stacked_original_length.png"
+        )
+
+        plot_stride_hill_metric_scatter(
+            results,
+            save_prefix=save_prefix
+        )
+
+    return results
+
+def plot_stacked_stride_hills_original_length(
+    frames,
+    y_diff_smooth,
+    stride_segments,
+    save_path=None
+):
+    """
+    Stack stride hills without resampling.
+    X-axis is frame offset from the start negative peak.
+    """
+
+    plt.figure(figsize=(10, 6))
+
+    for i, (s, e) in enumerate(stride_segments):
+        seg_y = y_diff_smooth[s:e + 1]
+        x_offset = frames[s:e + 1] - frames[s]
+
+        plt.plot(
+            x_offset,
+            seg_y,
+            linewidth=2,
+            alpha=0.75,
+            label=f"stride {i}"
+        )
+
+        # mark start/end negative peaks
+        plt.scatter(x_offset[0], seg_y[0], marker="v", s=50)
+        plt.scatter(x_offset[-1], seg_y[-1], marker="v", s=50)
+
+        # mark positive peak inside this stride
+        peak_local_idx = int(np.nanargmax(seg_y))
+        plt.scatter(
+            x_offset[peak_local_idx],
+            seg_y[peak_local_idx],
+            marker="^",
+            s=70
+        )
+
+    plt.axhline(0, color="gray", linewidth=1, alpha=0.4)
+    plt.xlabel("Frame offset from stride start")
+    plt.ylabel("Y-diff smooth")
+    plt.title("Stacked Full Stride Hills: Negative Peak to Negative Peak")
+    plt.grid(True, alpha=0.3)
+
+    if len(stride_segments) <= 12:
+        plt.legend()
+
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+
+    plt.show()
+
+def plot_stride_hill_metric_scatter(results, save_prefix=None):
+    stride_idx = np.arange(len(results["stride_times"]))
+
+    # stride time
+    plt.figure(figsize=(10, 4))
+    plt.plot(stride_idx, results["stride_times"], marker="o")
+    plt.xlabel("Stride index")
+    plt.ylabel("Stride time (sec)")
+    plt.title("Stride Hill Time")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_prefix is not None:
+        plt.savefig(f"{save_prefix}_stride_hill_time.png", dpi=200, bbox_inches="tight")
+    plt.show()
+
+    # stride height
+    plt.figure(figsize=(10, 4))
+    plt.plot(stride_idx, results["stride_heights"], marker="o")
+    plt.xlabel("Stride index")
+    plt.ylabel("Height from boundary baseline")
+    plt.title("Stride Hill Height")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_prefix is not None:
+        plt.savefig(f"{save_prefix}_stride_hill_height.png", dpi=200, bbox_inches="tight")
+    plt.show()
+
+    # time vs height scatter
+    plt.figure(figsize=(6, 6))
+    plt.scatter(results["stride_times"], results["stride_heights"])
+    plt.xlabel("Stride time (sec)")
+    plt.ylabel("Stride height")
+    plt.title("Stride Hill Scatter: Time vs Height")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_prefix is not None:
+        plt.savefig(f"{save_prefix}_stride_hill_time_height_scatter.png", dpi=200, bbox_inches="tight")
+    plt.show()
+
+    # peak relative timing
+    plt.figure(figsize=(10, 4))
+    plt.plot(stride_idx, results["stride_peak_relative_times"], marker="o")
+    plt.xlabel("Stride index")
+    plt.ylabel("Peak relative timing")
+    plt.title("Positive Peak Timing Inside Each Stride")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    if save_prefix is not None:
+        plt.savefig(f"{save_prefix}_stride_hill_peak_timing.png", dpi=200, bbox_inches="tight")
+    plt.show()
+
+def plot_y_diff_second_derivative(
+    frames,
+    y_diff_smooth,
+    neg_peaks=None,
+    pos_peaks=None,
+    save_path=None
+):
+    """
+    Plot the second derivative of the full y_diff_smooth curve.
+    This is NOT stacked by stride. It is computed on the original full signal.
+    """
+
+    frames = np.asarray(frames)
+    y_diff_smooth = np.asarray(y_diff_smooth, dtype=np.float32)
+
+    if len(y_diff_smooth) < 5:
+        print("Not enough points to compute second derivative.")
+        return None
+
+    # First derivative and second derivative over the full signal
+    d1 = np.gradient(y_diff_smooth)
+    d2 = np.gradient(d1)
+
+    plt.figure(figsize=(14, 5))
+
+    plt.plot(frames, d2, linewidth=2, label="second derivative of y_diff_smooth")
+
+    # Optional: show stride boundaries from negative peaks
+    if neg_peaks is not None and len(neg_peaks) > 0:
+        for i, p in enumerate(neg_peaks):
+            plt.axvline(
+                x=frames[p],
+                color="red",
+                linestyle="--",
+                alpha=0.25,
+                label="negative peaks" if i == 0 else None
+            )
+
+    # Optional: show positive peaks
+    if pos_peaks is not None and len(pos_peaks) > 0:
+        for i, p in enumerate(pos_peaks):
+            plt.axvline(
+                x=frames[p],
+                color="blue",
+                linestyle="--",
+                alpha=0.25,
+                label="positive peaks" if i == 0 else None
+            )
+
+    plt.axhline(0, color="gray", linewidth=1, alpha=0.4)
+    plt.xlabel("Frame")
+    plt.ylabel("Second derivative")
+    plt.title("Second Derivative of Full Y-diff Signal")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=200, bbox_inches="tight")
+
+    plt.show()
+
+    print("\nFull y_diff second derivative metrics:")
+    summarize_metric(np.abs(d2), "Full y_diff |second derivative|")
+    print(f"  max |second derivative| = {float(np.nanmax(np.abs(d2))):.6f}")
+
+    return {
+        "y_diff_d1": d1,
+        "y_diff_d2": d2,
+        "y_diff_d2_mean_abs": float(np.nanmean(np.abs(d2))),
+        "y_diff_d2_max_abs": float(np.nanmax(np.abs(d2))),
+        "y_diff_d2_std": float(np.nanstd(d2)),
+    }
 
 def plot_left_right_ankle_waves_with_gt(
     frames,
@@ -1774,14 +2111,93 @@ def analyze_stride_events_from_loops(frames,
 
     return results
 
+def find_nearest_frame_index(frames, target_frame):
+    """
+    Find the index in frames that is closest to target_frame.
+    """
+    frames = np.asarray(frames)
+    return int(np.argmin(np.abs(frames - target_frame)))
+
+
+def normalize_xdiff_by_manual_scale_frames(
+    x_diff,
+    frames,
+    ref_i_frame=None,
+    ref_j_frame=None,
+    eps=1e-8
+):
+    """
+    Scale-normalize x_diff using two manually selected reference frames i and j.
+
+    Formula:
+        alpha_k = 1 - (k - i) / (j - i)
+        beta_k  = (1 - alpha_k) * (x_i / x_j) + alpha_k
+        x_norm_k = beta_k * x_k
+
+    Here i and j are selected frames where the real-world x_diff should be comparable,
+    usually both representing x_diff = 0 in the real gait configuration.
+    """
+
+    x_diff = np.asarray(x_diff, dtype=np.float32).copy()
+    frames = np.asarray(frames)
+
+    if len(x_diff) < 2:
+        return x_diff, np.ones_like(x_diff, dtype=np.float32)
+
+    # If user does not provide manual frames, fallback to first and last frame
+    if ref_i_frame is None:
+        ref_i_idx = 0
+    else:
+        ref_i_idx = find_nearest_frame_index(frames, ref_i_frame)
+
+    if ref_j_frame is None:
+        ref_j_idx = len(x_diff) - 1
+    else:
+        ref_j_idx = find_nearest_frame_index(frames, ref_j_frame)
+
+    if ref_j_idx == ref_i_idx:
+        raise ValueError("ref_i_frame and ref_j_frame map to the same frame index.")
+
+    # make sure i < j
+    if ref_i_idx > ref_j_idx:
+        ref_i_idx, ref_j_idx = ref_j_idx, ref_i_idx
+
+    xi = float(x_diff[ref_i_idx])
+    xj = float(x_diff[ref_j_idx])
+
+    if abs(xj) < eps:
+        raise ValueError(
+            f"x_diff at ref_j_frame is too close to 0: xj={xj}. "
+            "Scale normalization would be unstable because it uses xi / xj."
+        )
+
+    k_idx = np.arange(len(x_diff), dtype=np.float32)
+
+    alpha = 1.0 - (k_idx - ref_i_idx) / float(ref_j_idx - ref_i_idx)
+    beta = (1.0 - alpha) * (xi / xj) + alpha
+
+    x_norm = beta * x_diff
+
+    print("\nManual x_diff scale normalization:")
+    print(f"  ref_i_frame = {frames[ref_i_idx]}, index = {ref_i_idx}, xi = {xi:.6f}")
+    print(f"  ref_j_frame = {frames[ref_j_idx]}, index = {ref_j_idx}, xj = {xj:.6f}")
+    print(f"  xi / xj = {xi / xj:.6f}")
+    print(f"  after normalization:")
+    print(f"    x_norm[i] = {x_norm[ref_i_idx]:.6f}")
+    print(f"    x_norm[j] = {x_norm[ref_j_idx]:.6f}")
+
+    return x_norm, beta
+
+
 def save_loop_motion_video(frames,
                            keypoints_all,
                            origin_foot="left",
                            normalize_y=True,
                            fps=30.0,
                            tail_length=None,
-                           bias_correct=False,
                            beta_x_normalize=False,
+                           x_norm_ref_i_frame=None,
+                           x_norm_ref_j_frame=None,
                            min_stride_sec=0.4,
                            save_path="loop_motion.mp4",
                            save_prefix=None):
@@ -1796,8 +2212,7 @@ def save_loop_motion_video(frames,
     normalize_y : whether to normalize Y before computing Y_diff
     fps : output video fps
     tail_length : if not None, only show the recent N points as a trailing tail
-    bias_correct : if True, shift the first point to (0,0)
-    beta_x_normalize : if True, apply beta_i = (1-alpha_i)*(x0/xn)+alpha_i to x_diff
+    beta_x_normalize : if True, apply manual scale normalization to x_diff using x_norm_ref_i_frame and x_norm_ref_j_frame
     min_stride_sec : minimum time between winding-based stride events
     save_path : output mp4 path
     """
@@ -1817,25 +2232,38 @@ def save_loop_motion_video(frames,
     x_plot = smooth_signal(x_diff, window_length=11, polyorder=2)
     y_plot = smooth_signal(y_diff, window_length=11, polyorder=2)
 
-    if beta_x_normalize and len(x_plot) > 1:
-        n = len(x_plot) - 1
-        i_arr = np.arange(len(x_plot), dtype=np.float32)
-        alpha = 1.0 - (i_arr / float(n))
-        x0 = float(x_plot[0])
-        xn = float(x_plot[-1])
-        if abs(xn) >= 1e-8:
-            beta = (1.0 - alpha) * (x0 / xn) + alpha
-            x_plot = x_plot * beta
+    if beta_x_normalize:
+        x_plot, beta = normalize_xdiff_by_manual_scale_frames(
+            x_plot,
+            frames,
+            ref_i_frame=x_norm_ref_i_frame,
+            ref_j_frame=x_norm_ref_j_frame
+        )
 
-    if bias_correct and len(x_plot) > 0:
-        x_plot = x_plot - x_plot[0]
-        y_plot = y_plot - y_plot[0]
+    # center the loop before computing winding angle
+    x_centered = x_plot - np.nanmedian(x_plot)
+    y_centered = y_plot - np.nanmedian(y_plot)
 
-    radius = np.sqrt(x_plot * x_plot + y_plot * y_plot)
+    # optional: normalize x/y scale so angle is not dominated by x range or y range
+    x_scale = np.nanstd(x_centered)
+    y_scale = np.nanstd(y_centered)
+
+    if x_scale < 1e-8:
+        x_scale = 1.0
+    if y_scale < 1e-8:
+        y_scale = 1.0
+
+    x_phase = x_centered / x_scale
+    y_phase = y_centered / y_scale
+
+    x_video = x_centered
+    y_video = y_centered
+
+    radius = np.sqrt(x_phase * x_phase + y_phase * y_phase)
     max_radius = float(np.nanmax(radius)) if len(radius) > 0 else 0.0
     valid_radius = radius > max(1e-6, 0.02 * max_radius)
 
-    theta_wrapped = np.arctan2(y_plot, x_plot)
+    theta_wrapped = np.arctan2(y_phase, x_phase)
     theta_unwrapped = np.unwrap(theta_wrapped)
 
     if np.any(valid_radius):
@@ -1851,29 +2279,35 @@ def save_loop_motion_video(frames,
     winding_factor = winding_phase / (2.0 * np.pi)
 
     min_distance_frames = max(3, int(min_stride_sec * fps))
-    cycle_id = np.floor(winding_factor).astype(int)
     event_idx = []
     last_event_idx = -10**9
-    for idx in range(max(1, first_valid + 1), len(cycle_id)):
-        if cycle_id[idx] > cycle_id[idx - 1] and idx - last_event_idx >= min_distance_frames:
-            event_idx.append(idx)
-            last_event_idx = idx
+    next_cycle = 1.0
+
+    for idx in range(max(1, first_valid + 1), len(winding_factor)):
+        prev_w = winding_factor[idx - 1]
+        cur_w = winding_factor[idx]
+
+        # detect crossing of next positive integer cycle
+        if prev_w < next_cycle <= cur_w:
+            if idx - last_event_idx >= min_distance_frames:
+                event_idx.append(idx)
+                last_event_idx = idx
+                next_cycle += 1.0
+
     event_idx = np.array(event_idx, dtype=np.int32)
 
     fig, ax = plt.subplots(figsize=(7, 7))
 
     # set fixed axis range
-    x_margin = 0.1 * max(1e-6, np.max(x_plot) - np.min(x_plot))
-    y_margin = 0.1 * max(1e-6, np.max(y_plot) - np.min(y_plot))
+    x_margin = 0.1 * max(1e-6, np.max(x_video) - np.min(x_video))
+    y_margin = 0.1 * max(1e-6, np.max(y_video) - np.min(y_video))
 
-    ax.set_xlim(np.min(x_plot) - x_margin, np.max(x_plot) + x_margin)
-    ax.set_ylim(np.min(y_plot) - y_margin, np.max(y_plot) + y_margin)
+    ax.set_xlim(np.min(x_video) - x_margin, np.max(x_video) + x_margin)
+    ax.set_ylim(np.min(y_video) - y_margin, np.max(y_video) + y_margin)
 
     ax.axhline(0, color="gray", linewidth=1, alpha=0.4)
     ax.axvline(0, color="gray", linewidth=1, alpha=0.4)
 
-    ax.set_xlabel("X_diff (moving foot - origin foot)" + (" shifted" if bias_correct else ""))
-    ax.set_ylabel("Y_diff" + (" (Y normalized)" if normalize_y else " (raw)") + (" shifted" if bias_correct else ""))
     ax.set_title(f"Loop Motion Over Time ({origin_foot} foot as origin)")
     ax.grid(True, alpha=0.3)
 
@@ -1897,11 +2331,11 @@ def save_loop_motion_video(frames,
         else:
             s = max(0, i - tail_length + 1)
 
-        line.set_data(x_plot[s:i+1], y_plot[s:i+1])
-        point.set_data([x_plot[i]], [y_plot[i]])
+        line.set_data(x_video[s:i+1], y_video[s:i+1])
+        point.set_data([x_video[i]], [y_video[i]])
         visible_events = event_idx[event_idx <= i]
         if len(visible_events) > 0:
-            event_points.set_data(x_plot[visible_events], y_plot[visible_events])
+            event_points.set_data(x_video[visible_events], y_video[visible_events])
         else:
             event_points.set_data([], [])
 
@@ -1939,15 +2373,19 @@ PRESETS = {
         "end_frame": 115,
         "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\tracked\a_manual_stride_events.json",
         "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Baseline_side\metrics\loop_motion",
+        "x_ref_i": 22,
+        "x_ref_j": 114,
     },
     "Chiocchi_mirror": {
         "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\track.json",
         "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\metrics",
         "fps": 30.0,
-        "start_frame": 30,
+        "start_frame": 10,
         "end_frame": 480,
         "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\a_manual_stride_events.json",
         "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Chiocchi_mirror\metrics\loop_motion",
+        "x_ref_i": 10,
+        "x_ref_j": 469,
     },
     "Sronce_walker_post_op": {
         "track_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_walker_post_op\tracked\track.json",
@@ -1963,7 +2401,7 @@ PRESETS = {
         "metrics_dir": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\metrics",
         "fps": 60.0,
         "start_frame": None,
-        "end_frame": None,
+        "end_frame": 200,
         "gt_json_path": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\tracked\a_manual_stride_events.json",
         "loop_motion_prefix": r"E:\Documents\WashU\Senior\Second Semester\Project\sapiens\lite\output\pose\Sronce_preop\metrics\loop_motion",
     },
@@ -2008,6 +2446,20 @@ def parse_args():
 
     parser.add_argument("--run_loop_motion", action="store_true", help="Run loop motion video generation")
 
+    parser.add_argument(
+        "--x_ref_i",
+        type=int,
+        default=None,
+        help="First manual reference frame for x_diff scale normalization"
+    )
+
+    parser.add_argument(
+        "--x_ref_j",
+        type=int,
+        default=None,
+        help="Second manual reference frame for x_diff scale normalization"
+    )
+
     return parser.parse_args()
 
 
@@ -2020,6 +2472,8 @@ def build_config(args):
         "end_frame": None,
         "gt_json_path": None,
         "loop_motion_prefix": None,
+        "x_ref_i": None,
+        "x_ref_j": None,
     }
 
     if args.preset is not None:
@@ -2051,6 +2505,8 @@ if __name__ == "__main__":
     end_frame = config["end_frame"]
     gt_json_path = config["gt_json_path"]
     loop_motion_prefix = config["loop_motion_prefix"]
+    x_norm_ref_i_frame = config["x_ref_i"]
+    x_norm_ref_j_frame = config["x_ref_j"]
 
     save_path = os.path.join(metrics_dir, "17_keypoints_time_vs_y.png")
 
@@ -2079,8 +2535,9 @@ if __name__ == "__main__":
             normalize_y=True,
             fps=fps,
             tail_length=None,
-            bias_correct=True,
             beta_x_normalize=True,
+            x_norm_ref_i_frame=x_norm_ref_i_frame,
+            x_norm_ref_j_frame=x_norm_ref_j_frame,
             save_prefix=loop_motion_prefix or os.path.join(metrics_dir, "loop_motion")
         )
 
@@ -2095,18 +2552,18 @@ if __name__ == "__main__":
         gt_json_path=gt_json_path
     )
 
-    # Step 4: wrist relative height (default run)
-    wrist_results = analyze_wrist_relative_height(
-        frames,
-        keypoints_all,
-        save_path=os.path.join(metrics_dir, "wrist_relative_height.png")
-    )
+    # # Step 4: wrist relative height (default run)
+    # wrist_results = analyze_wrist_relative_height(
+    #     frames,
+    #     keypoints_all,
+    #     save_path=os.path.join(metrics_dir, "wrist_relative_height.png")
+    # )
 
-    write_metrics_report(
-        os.path.join(metrics_dir, "metrics.txt"),
-        fb_norm,
-        wrist_results=wrist_results
-    )
+    # write_metrics_report(
+    #     os.path.join(metrics_dir, "metrics.txt"),
+    #     fb_norm,
+    #     wrist_results=wrist_results
+    # )
     
     # # Step 5: plot ankle waves with GT stride events
     # plot_left_right_ankle_waves_with_gt(
@@ -2147,5 +2604,10 @@ if __name__ == "__main__":
 # Choose separation points for each stride and stack all strides hills together to see whether the stride pattern is consistent across strides
 # For each stride, slice the curve vertically and calculate crossing points' variation, mean value and find a way to compute the difference areas between the strides curves
 # Take the second derivatives of the patients curves and the normal person curve and stack them together. 
-# For normal person, second derivatives should be more smooth and less peaky, but for patients, it should have a much higher amplitude and more peaky and inconsistent
+# For normal person, second derivatives should be more smooth and less peaky, but for patients, it should have a much higher amplitude and more peaky and inconsistentUse
 
+# Use linear interpolation to compute relative torso length and use this linear interpolation to normalize x_diff and y_diff
+# Normalize x_diff with respect to the torso length
+# Use (x_i, y_i), the frame that both feet on the ground as origin
+# Take f'(x) = f(x*s) with s=mean # of frames per stride, f: frames to Y_diff
+# Angle 
